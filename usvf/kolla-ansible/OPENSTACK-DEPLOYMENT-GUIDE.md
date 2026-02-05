@@ -14,6 +14,7 @@
    - [What is Ceph and Why Use It?](#what-is-ceph-and-why-use-it)
 2. [PART 2: Your Infrastructure Architecture](#part-2-your-infrastructure-architecture)
    - [Physical Layout](#physical-layout)
+   - [Deployment Topology: 3-Node vs 5-Node](#deployment-topology-3-node-converged-vs-5-node-separated)
    - [Network Design](#network-design)
    - [Why Anycast VIP?](#why-anycast-vip-instead-of-keepalived)
 3. [PART 3: Understanding the Configuration Files](#part-3-understanding-the-configuration-files)
@@ -309,6 +310,398 @@ Each OpenStack service gets its own Ceph user with specific permissions:
    │                                                             │
    └─────────────────────────────────────────────────────────────┘
 ```
+
+> **Note:** The diagram above shows a **5-node separated setup**. See the section below for 3-node converged architecture.
+
+## Deployment Topology: 3-Node Converged vs 5-Node Separated
+
+### Overview
+
+Your OpenStack deployment can be configured in two ways depending on your needs:
+
+| Topology | Description | Best For | Total Hosts |
+|----------|-------------|----------|-------------|
+| **3-Node Converged** | Control + Compute on same nodes | Dev/test, small environments, cost savings | 3 |
+| **5-Node Separated** | Dedicated control (3) + compute (2) nodes | Production, better isolation, scalability | 5 |
+
+---
+
+### 3-Node Converged Architecture
+
+**When to use:** Development, testing, proof-of-concept, small deployments
+
+```
+                     192.168.10.0/24 Management Network
+                                  │
+   ┌──────────────────────────────┼──────────────────────────────┐
+   │                              │                              │
+   │    ALL SERVICES ON SAME NODES (Converged Architecture)     │
+   │                                                             │
+   │  ┌─────────┐         ┌─────────┐         ┌─────────┐      │
+   │  │  HV-1   │         │  HV-2   │         │  HV-3   │      │
+   │  │.10.11   │         │.10.12   │         │.10.13   │      │
+   │  ├─────────┤         ├─────────┤         ├─────────┤      │
+   │  │CONTROL: │         │CONTROL: │         │CONTROL: │      │
+   │  │Keystone │         │Keystone │         │Keystone │      │
+   │  │Nova API │         │Nova API │         │Nova API │      │
+   │  │Neutron  │         │Neutron  │         │Neutron  │      │
+   │  │Horizon  │         │Horizon  │         │Horizon  │      │
+   │  │MariaDB  │         │MariaDB  │         │MariaDB  │      │
+   │  │RabbitMQ │         │RabbitMQ │         │RabbitMQ │      │
+   │  ├─────────┤         ├─────────┤         ├─────────┤      │
+   │  │COMPUTE: │         │COMPUTE: │         │COMPUTE: │      │
+   │  │Nova     │         │Nova     │         │Nova     │      │
+   │  │Compute  │         │Compute  │         │Compute  │      │
+   │  │(runs VMs│         │(runs VMs│         │(runs VMs│      │
+   │  ├─────────┤         ├─────────┤         ├─────────┤      │
+   │  │CEPH:    │         │CEPH:    │         │CEPH:    │      │
+   │  │MON      │         │MON      │         │MON      │      │
+   │  │MGR      │         │MGR      │         │MGR      │      │
+   │  │OSD      │         │OSD      │         │OSD      │      │
+   │  │RadosGW  │         │RadosGW  │         │RadosGW  │      │
+   │  └─────────┘         └─────────┘         └─────────┘      │
+   │       │                   │                   │            │
+   │  ┌────┴───────────────────┴───────────────────┴────┐      │
+   │  │   Anycast VIP: 10.100.0.254 on ALL 3 nodes     │      │
+   │  └────────────────────────────────────────────────┘      │
+   └─────────────────────────────────────────────────────────┘
+```
+
+**Characteristics:**
+- ✅ Fewer physical servers needed (cost-effective)
+- ✅ Simpler to manage (fewer nodes to maintain)
+- ✅ All services highly available (3 copies)
+- ⚠️ VMs run on same nodes as control plane (resource contention possible)
+- ⚠️ Less isolation between control and data planes
+
+---
+
+### 5-Node Separated Architecture
+
+**When to use:** Production deployments, better performance isolation, scalability
+
+```
+                     192.168.10.0/24 Management Network
+                                  │
+   ┌──────────────────────────────┼──────────────────────────────┐
+   │                              │                              │
+   │    CONTROL PLANE             │         DATA PLANE           │
+   │    (Controllers)             │         (Computes)           │
+   │                              │                              │
+   │  ┌─────────┐ ┌─────────┐ ┌─────────┐   ┌─────────┐ ┌─────────┐
+   │  │  HV-1   │ │  HV-2   │ │  HV-3   │   │  HV-4   │ │  HV-5   │
+   │  │.10.11   │ │.10.12   │ │.10.13   │   │.10.14   │ │.10.15   │
+   │  ├─────────┤ ├─────────┤ ├─────────┤   ├─────────┤ ├─────────┤
+   │  │CONTROL: │ │CONTROL: │ │CONTROL: │   │COMPUTE: │ │COMPUTE: │
+   │  │Keystone │ │Keystone │ │Keystone │   │Nova     │ │Nova     │
+   │  │Nova API │ │Nova API │ │Nova API │   │Compute  │ │Compute  │
+   │  │Neutron  │ │Neutron  │ │Neutron  │   │(runs VMs│ │(runs VMs│
+   │  │Horizon  │ │Horizon  │ │Horizon  │   │ ONLY)   │ │ ONLY)   │
+   │  │MariaDB  │ │MariaDB  │ │MariaDB  │   │         │ │         │
+   │  │RabbitMQ │ │RabbitMQ │ │RabbitMQ │   │Cinder   │ │Cinder   │
+   │  │Glance   │ │Glance   │ │Glance   │   │Volume   │ │Volume   │
+   │  │Cinder   │ │Cinder   │ │Cinder   │   │         │ │         │
+   │  ├─────────┤ ├─────────┤ ├─────────┤   ├─────────┤ ├─────────┤
+   │  │CEPH:    │ │CEPH:    │ │CEPH:    │   │CEPH:    │ │CEPH:    │
+   │  │MON      │ │MON      │ │MON      │   │OSD      │ │OSD      │
+   │  │MGR      │ │MGR      │ │MGR      │   │RadosGW  │ │RadosGW  │
+   │  └─────────┘ └─────────┘ └─────────┘   └─────────┘ └─────────┘
+   │       │            │            │                              │
+   │  ┌────┴────────────┴────────────┴────┐                        │
+   │  │ Anycast VIP: 10.100.0.254         │                        │
+   │  │ (Only on 3 control nodes)         │                        │
+   │  └───────────────────────────────────┘                        │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+**Characteristics:**
+- ✅ Control plane isolated from workload VMs (better performance)
+- ✅ Easier to scale compute independently (add more HV-6, HV-7...)
+- ✅ Production-ready architecture
+- ⚠️ Requires more physical servers (higher cost)
+- ⚠️ More complex networking setup
+
+---
+
+### Configuration Comparison
+
+#### 1. File: `config.sh`
+
+| Setting | 3-Node Converged | 5-Node Separated |
+|---------|------------------|------------------|
+| `CONTROL_IPS` | `("192.168.10.11" "192.168.10.12" "192.168.10.13")` | `("192.168.10.11" "192.168.10.12" "192.168.10.13")` |
+| `CONTROL_NAMES` | `("hypervisor-1" "hypervisor-2" "hypervisor-3")` | `("hypervisor-1" "hypervisor-2" "hypervisor-3")` |
+| `COMPUTE_IPS` | `("192.168.10.11" "192.168.10.12" "192.168.10.13")` ⬅️ **SAME** | `("192.168.10.14" "192.168.10.15")` ⬅️ **DIFFERENT** |
+| `COMPUTE_NAMES` | `("hypervisor-1" "hypervisor-2" "hypervisor-3")` ⬅️ **SAME** | `("hypervisor-4" "hypervisor-5")` ⬅️ **DIFFERENT** |
+
+**Key Difference:** In 3-node setup, `COMPUTE_IPS` == `CONTROL_IPS` (same nodes). In 5-node, they're different.
+
+---
+
+#### 2. File: `globals.yml` - RadosGW Configuration
+
+**3-Node Converged:**
+```yaml
+# RadosGW runs on all 3 control/compute nodes
+ceph_rgw_hosts:
+  - host: 192.168.10.11
+    port: 7480
+  - host: 192.168.10.12
+    port: 7480
+  - host: 192.168.10.13
+    port: 7480
+```
+
+**5-Node Separated:**
+```yaml
+# RadosGW runs on compute nodes (where Ceph OSDs are)
+ceph_rgw_hosts:
+  - host: 192.168.10.14
+    port: 7480
+  - host: 192.168.10.15
+    port: 7480
+```
+
+**Why the difference?** RadosGW should run on nodes with Ceph OSDs for optimal performance and locality.
+
+---
+
+#### 3. Ceph Cluster Deployment
+
+**3-Node Converged:**
+```bash
+# Deploy RadosGW on control/compute nodes
+sudo cephadm shell -- ceph orch apply rgw s3-gw \
+  --placement="hypervisor-1 hypervisor-2 hypervisor-3" \
+  --port 7480
+```
+
+**5-Node Separated:**
+```bash
+# Deploy RadosGW on compute-only nodes
+sudo cephadm shell -- ceph orch apply rgw s3-gw \
+  --placement="hypervisor-4 hypervisor-5" \
+  --port 7480
+```
+
+---
+
+#### 4. Generated `multinode` Inventory
+
+The `openstack-deploy.sh` script automatically generates the correct inventory based on `config.sh`.
+
+**3-Node Converged Example:**
+```ini
+[control]
+control01 ansible_host=192.168.10.11 ...
+control02 ansible_host=192.168.10.12 ...
+control03 ansible_host=192.168.10.13 ...
+
+[compute]
+compute01 ansible_host=192.168.10.11 ...  # Same IPs as control
+compute02 ansible_host=192.168.10.12 ...
+compute03 ansible_host=192.168.10.13 ...
+```
+
+**5-Node Separated Example:**
+```ini
+[control]
+control01 ansible_host=192.168.10.11 ...
+control02 ansible_host=192.168.10.12 ...
+control03 ansible_host=192.168.10.13 ...
+
+[compute]
+compute01 ansible_host=192.168.10.14 ...  # Different IPs
+compute02 ansible_host=192.168.10.15 ...
+```
+
+---
+
+### Migration Guide: 3-Node → 5-Node
+
+If you're starting with 3 nodes and want to expand to 5 nodes:
+
+#### Step 1: Add Physical Nodes to Ceph Cluster
+
+```bash
+# SSH to first control node
+ssh ubuntu@192.168.10.11
+
+# Add new compute nodes to Ceph cluster
+sudo cephadm shell -- ceph orch host add hypervisor-4 192.168.10.14
+sudo cephadm shell -- ceph orch host add hypervisor-5 192.168.10.15
+
+# Label them for OSD deployment
+sudo cephadm shell -- ceph orch host label add hypervisor-4 osd
+sudo cephadm shell -- ceph orch host label add hypervisor-5 osd
+
+# Deploy OSDs on new nodes
+sudo cephadm shell -- ceph orch apply osd --all-available-devices
+
+# Verify OSDs are up
+sudo cephadm shell -- ceph osd tree
+```
+
+#### Step 2: Update `config.sh`
+
+```bash
+# On deployment host
+cd /Users/sushantpatrikar/usvf/usvf
+
+# Edit config.sh
+nano config.sh
+```
+
+**Change from:**
+```bash
+COMPUTE_IPS=("192.168.10.11" "192.168.10.12" "192.168.10.13")
+COMPUTE_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3")
+```
+
+**To:**
+```bash
+COMPUTE_IPS=("192.168.10.14" "192.168.10.15")
+COMPUTE_NAMES=("hypervisor-4" "hypervisor-5")
+```
+
+#### Step 3: Redeploy RadosGW on Compute Nodes
+
+```bash
+# Remove old RGW deployment from control nodes
+ssh ubuntu@192.168.10.11
+sudo cephadm shell -- ceph orch rm rgw.s3-gw
+
+# Deploy RGW on new compute nodes
+sudo cephadm shell -- ceph orch apply rgw s3-gw \
+  --placement="hypervisor-4 hypervisor-5" \
+  --port 7480
+
+# Verify RGW is running
+sudo cephadm shell -- ceph orch ps --daemon-type rgw
+```
+
+#### Step 4: Update `globals.yml`
+
+```bash
+cd /Users/sushantpatrikar/usvf/usvf/kolla-ansible
+nano globals.yml
+```
+
+**Change RadosGW hosts section from:**
+```yaml
+ceph_rgw_hosts:
+  - host: 192.168.10.11
+    port: 7480
+  - host: 192.168.10.12
+    port: 7480
+  - host: 192.168.10.13
+    port: 7480
+```
+
+**To:**
+```yaml
+ceph_rgw_hosts:
+  - host: 192.168.10.14
+    port: 7480
+  - host: 192.168.10.15
+    port: 7480
+```
+
+#### Step 5: Bootstrap New Compute Nodes
+
+```bash
+cd /Users/sushantpatrikar/usvf/usvf/kolla-ansible
+
+# Regenerate multinode inventory (this happens automatically in deploy script)
+./openstack-deploy.sh configs
+
+# Bootstrap only the new compute nodes
+source ~/kolla-venv/bin/activate
+cd /etc/kolla
+kolla-ansible bootstrap-servers -i multinode --limit compute01,compute02
+
+# Run prechecks
+kolla-ansible prechecks -i multinode --limit compute01,compute02
+
+# Deploy compute services
+kolla-ansible deploy -i multinode --limit compute01,compute02
+```
+
+#### Step 6: Reconfigure Ceph RGW Integration
+
+```bash
+# Reconfigure to pick up new RGW endpoints
+kolla-ansible reconfigure -i multinode --tags ceph,keystone,horizon
+```
+
+#### Step 7: Verify Migration
+
+```bash
+# Check compute nodes are registered
+source /etc/kolla/admin-openrc.sh
+openstack hypervisor list
+
+# Should show:
+# hypervisor-4 (192.168.10.14)
+# hypervisor-5 (192.168.10.15)
+
+# Verify RGW endpoints
+openstack endpoint list | grep object
+
+# Test creating a VM on new compute nodes
+openstack server create --flavor m1.small --image cirros \
+  --availability-zone nova:hypervisor-4 test-vm-hv4
+```
+
+#### Step 8: Optional - Remove Compute from Control Nodes
+
+If you want a pure 5-node separated setup (no VMs on control nodes):
+
+```bash
+# Disable nova-compute on control nodes
+# Edit /etc/kolla/multinode, remove control nodes from [compute] section
+# Then run:
+kolla-ansible reconfigure -i multinode --tags nova
+```
+
+---
+
+### Quick Decision Matrix
+
+**Choose 3-Node Converged if:**
+- ✅ You're doing development/testing
+- ✅ Budget is limited (fewer servers)
+- ✅ Your workload is light to moderate
+- ✅ Simplicity is more important than isolation
+- ✅ You have 3 physical servers available
+
+**Choose 5-Node Separated if:**
+- ✅ This is a production deployment
+- ✅ You need performance isolation (control plane never competes with VMs)
+- ✅ You plan to scale compute independently
+- ✅ You want dedicated compute resources
+- ✅ You have 5+ physical servers available
+
+---
+
+### Summary Table
+
+| Aspect | 3-Node Converged | 5-Node Separated |
+|--------|------------------|------------------|
+| **Total Hosts** | 3 | 5 |
+| **Control Nodes** | 11, 12, 13 | 11, 12, 13 |
+| **Compute Nodes** | 11, 12, 13 (same) | 14, 15 (different) |
+| **Ceph MON/MGR** | 11, 12, 13 | 11, 12, 13 |
+| **Ceph OSD** | 11, 12, 13 | 14, 15 |
+| **RadosGW** | 11, 12, 13 | 14, 15 |
+| **VIP Location** | All 3 nodes | Control nodes only |
+| **VM Execution** | Control nodes (shared) | Compute nodes (dedicated) |
+| **Config Changes** | COMPUTE_IPS = CONTROL_IPS | COMPUTE_IPS ≠ CONTROL_IPS |
+| **Best For** | Dev, test, PoC | Production, scale |
+| **Cost** | Lower (3 servers) | Higher (5 servers) |
+| **Complexity** | Simpler | More complex |
+
+---
 
 ## Network Design
 

@@ -13,6 +13,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENSTACK_SCRIPT="$SCRIPT_DIR/openstack-deploy.sh"
 CEPH_SCRIPT="$(dirname "$SCRIPT_DIR")/virtual-dc/scripts/ceph-cluster-setup.sh"
 
+# Source centralized configuration
+CONFIG_FILE="$(dirname "$SCRIPT_DIR")/config.sh"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "ERROR: config.sh not found at $CONFIG_FILE"
+    echo "Please create config.sh based on the template"
+    echo "Expected location: $(dirname "$SCRIPT_DIR")/config.sh"
+    exit 1
+fi
+source "$CONFIG_FILE"
+
 # Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -156,10 +166,24 @@ phase8_openstack_deploy() {
 }
 
 # =============================================================================
-# PHASE 9: Verification
+# PHASE 9: RadosGW Keystone Integration
 # =============================================================================
-phase9_verify() {
-    log_section "PHASE 9: Verification"
+phase9_rgw_keystone() {
+    log_section "PHASE 9: RadosGW Keystone Integration"
+
+    log_info "Configuring RadosGW with Keystone authentication..."
+    log_info "This enables Swift API to work with OpenStack credentials"
+
+    bash "$OPENSTACK_SCRIPT" rgw-keystone
+
+    log_success "RadosGW Keystone integration complete"
+}
+
+# =============================================================================
+# PHASE 10: Verification
+# =============================================================================
+phase10_verify() {
+    log_section "PHASE 10: Verification"
 
     log_info "Running verification tests..."
     bash "$OPENSTACK_SCRIPT" verify
@@ -168,12 +192,52 @@ phase9_verify() {
 }
 
 # =============================================================================
+# Pre-flight Checks
+# =============================================================================
+preflight_checks() {
+    log_section "Pre-flight Checks"
+
+    # Validate configuration
+    log_info "Validating configuration..."
+    if ! validate_config; then
+        log_error "Configuration validation failed"
+        exit 1
+    fi
+
+    # Test SSH connectivity
+    log_info "Testing SSH connectivity..."
+    if ! test_ssh_connectivity; then
+        log_error "SSH connectivity test failed"
+        exit 1
+    fi
+
+    # Check if scripts exist
+    if [[ ! -f "$CEPH_SCRIPT" ]]; then
+        log_error "Ceph script not found: $CEPH_SCRIPT"
+        exit 1
+    fi
+
+    if [[ ! -f "$OPENSTACK_SCRIPT" ]]; then
+        log_error "OpenStack script not found: $OPENSTACK_SCRIPT"
+        exit 1
+    fi
+
+    log_success "All pre-flight checks passed!"
+    echo ""
+}
+
+# =============================================================================
 # Main Execution
 # =============================================================================
 main() {
     log_section "Starting Complete OpenStack + Ceph Deployment"
-    log_info "This will take approximately 30-45 minutes"
+    log_info "Configuration: $CONFIG_FILE"
+    log_info "Control Nodes: ${#CONTROL_IPS[@]} (${CONTROL_IPS[*]})"
+    log_info "Compute Nodes: ${#COMPUTE_IPS[@]} (${COMPUTE_IPS[*]})"
     echo ""
+
+    # Run pre-flight checks
+    preflight_checks
 
     phase1_openstack_prereqs
     phase2_create_base_configs
@@ -183,7 +247,8 @@ main() {
     phase6_create_ceph_users
     phase7_distribute_ceph_configs
     phase8_openstack_deploy
-    phase9_verify
+    phase9_rgw_keystone
+    phase10_verify
 
     log_section "DEPLOYMENT COMPLETE!"
     log_success "OpenStack with Ceph backend is now fully operational"
@@ -220,7 +285,10 @@ case "${1:-all}" in
         phase8_openstack_deploy
         ;;
     phase9)
-        phase9_verify
+        phase9_rgw_keystone
+        ;;
+    phase10)
+        phase10_verify
         ;;
     *)
         main

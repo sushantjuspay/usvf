@@ -693,31 +693,6 @@ setup_kolla_configs() {
     generate_multinode_inventory
     generate_globals_yml
 
-    # Copy ansible.cfg to Kolla config directory
-    log_info "Copying ansible.cfg to $KOLLA_CONFIG..."
-    if [ -f "$SCRIPT_DIR/ansible.cfg" ]; then
-        cp "$SCRIPT_DIR/ansible.cfg" "$KOLLA_CONFIG/ansible.cfg"
-        log_success "ansible.cfg copied (disables host key checking)"
-    else
-        log_warning "ansible.cfg not found in $SCRIPT_DIR, creating default..."
-        cat > "$KOLLA_CONFIG/ansible.cfg" << 'EOF'
-[defaults]
-host_key_checking = False
-gathering = smart
-fact_caching = jsonfile
-fact_caching_connection = /tmp/ansible_facts
-fact_caching_timeout = 3600
-stdout_callback = yaml
-deprecation_warnings = False
-inventory = /etc/kolla/multinode
-
-[ssh_connection]
-pipelining = True
-ssh_args = -o ControlMaster=auto -o ControlPersist=60s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-EOF
-        log_success "Default ansible.cfg created"
-    fi
-
     # Create directory structure for Ceph configs
     log_info "Creating config directory structure..."
     mkdir -p "$KOLLA_CONFIG/config/glance"
@@ -778,6 +753,731 @@ __REMOVED_OLD_INLINE_CONFIG_GENERATION() {
 
 # Continuing with the rest of the script...
 
+# =============================================================================
+# Phase 4: Setup VIP on Controllers
+# =============================================================================
+
+setup_vip() {
+---
+# ========================
+# 1. Base Setup
+# ========================
+kolla_base_distro: "ubuntu"
+kolla_install_type: "source"
+openstack_release: "2024.2"
+
+# ========================
+# 2. Networking (Underlay)
+# ========================
+# VIP on Controller Loopbacks (Anycast)
+kolla_internal_vip_address: "${VIP}"
+enable_keepalived: "no"
+
+# Bind services to Host Loopbacks
+api_interface_address: "{{ api_ip }}"
+tunnel_interface_address: "{{ tunnel_ip }}"
+
+# External network interface
+neutron_external_interface: "dum-ex"
+network_interface: "lo1"
+
+# ========================
+# 3. OVN Configuration
+# ========================
+neutron_plugin_agent: "ovn"
+neutron_tunnel_type: "geneve"
+enable_neutron_dvr: "yes"
+enable_neutron_provider_networks: "yes"
+neutron_ovn_distributed_fip: "yes"
+
+# ========================
+# 4. OVN BGP AGENT
+# ========================
+enable_neutron_bgp_dragent: "no"
+enable_ovn_bgp_agent: "yes"
+ovn_bgp_agent_driver: "nb_ovn_bgp_driver"
+
+# ========================
+# 5. FRR Handling
+# ========================
+enable_frr: "no"
+
+# ========================
+# 6. Core Services
+# ========================
+enable_horizon: "yes"
+enable_heat: "yes"
+enable_fluentd: "yes"
+enable_cinder: "yes"
+
+# ========================
+# 7. Ceph Configuration (External Cluster)
+# ========================
+# Glance - Store images in Ceph
+glance_backend_ceph: "yes"
+glance_backend_file: "no"
+ceph_glance_keyring: "client.glance.keyring"
+ceph_glance_user: "glance"
+ceph_glance_pool_name: "images"
+
+# Cinder - Block storage with Ceph RBD
+enable_cinder_backend_lvm: "no"
+cinder_backend_ceph: "yes"
+ceph_cinder_keyring: "client.cinder.keyring"
+ceph_cinder_user: "cinder"
+ceph_cinder_pool_name: "volumes"
+
+# Cinder HA - required when multiple cinder-volume instances
+cinder_cluster_name: "ceph-cinder"
+
+# Cinder Backup to Ceph
+cinder_backup_driver: "ceph"
+ceph_cinder_backup_keyring: "client.cinder-backup.keyring"
+ceph_cinder_backup_user: "cinder-backup"
+ceph_cinder_backup_pool_name: "backups"
+
+# Nova - Ephemeral disks and live migration with Ceph
+nova_backend_ceph: "yes"
+ceph_nova_keyring: "client.nova.keyring"
+ceph_nova_user: "nova"
+ceph_nova_pool_name: "vms"
+EOF
+
+    # Create multinode inventory
+    log_info "Creating multinode inventory..."
+    cat > "$KOLLA_CONFIG/multinode" << EOF
+# OpenStack Multinode Inventory
+# Control Plane: hypervisor-1,2,3
+# Compute/Storage: hypervisor-4,5
+# Subnet: 192.168.10.0/24
+
+[control]
+control01 ansible_host=192.168.10.11 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.1 tunnel_ip=10.1.0.1
+control02 ansible_host=192.168.10.12 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.2 tunnel_ip=10.1.0.2
+control03 ansible_host=192.168.10.13 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.3 tunnel_ip=10.1.0.3
+
+[network]
+control01
+control02
+control03
+
+[compute]
+compute01 ansible_host=192.168.10.14 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.4 tunnel_ip=10.1.0.4
+compute02 ansible_host=192.168.10.15 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.5 tunnel_ip=10.1.0.5
+
+[monitoring]
+control01
+
+# When compute nodes and control nodes use different interfaces,
+# you need to comment out "api_interface" and other interfaces from the globals.yml
+# and specify like below:
+#compute01 neutron_external_interface=eth0 api_interface=em1 tunnel_interface=em1
+
+[storage]
+compute01
+compute02
+
+[deployment]
+localhost       ansible_connection=local
+
+[baremetal:children]
+control
+network
+compute
+storage
+monitoring
+
+[tls-backend:children]
+control
+
+# You can explicitly specify which hosts run each project by updating the
+# groups in the sections below. Common services are grouped together.
+
+[common:children]
+control
+network
+compute
+storage
+monitoring
+
+[collectd:children]
+compute
+
+[grafana:children]
+monitoring
+
+[etcd:children]
+control
+
+[influxdb:children]
+monitoring
+
+[prometheus:children]
+monitoring
+
+[telegraf:children]
+compute
+control
+monitoring
+network
+storage
+
+[hacluster:children]
+control
+
+[hacluster-remote:children]
+compute
+
+[loadbalancer:children]
+network
+
+[mariadb:children]
+control
+
+[rabbitmq:children]
+control
+
+[keystone:children]
+control
+
+[glance:children]
+control
+
+[nova:children]
+control
+
+[neutron:children]
+network
+
+[openvswitch:children]
+network
+compute
+manila-share
+
+[cinder:children]
+control
+
+[cloudkitty:children]
+control
+
+[memcached:children]
+control
+
+[horizon:children]
+control
+
+[swift:children]
+control
+
+[barbican:children]
+control
+
+[heat:children]
+control
+
+[ironic:children]
+control
+
+[magnum:children]
+control
+
+[mistral:children]
+control
+
+[manila:children]
+control
+
+[ceilometer:children]
+control
+
+[aodh:children]
+control
+
+[cyborg:children]
+control
+compute
+
+[gnocchi:children]
+control
+
+[tacker:children]
+control
+
+[trove:children]
+control
+
+[watcher:children]
+control
+
+[octavia:children]
+control
+
+[designate:children]
+control
+
+[placement:children]
+control
+
+[bifrost:children]
+deployment
+
+[zun:children]
+control
+
+[skyline:children]
+control
+
+[redis:children]
+control
+
+[blazar:children]
+control
+
+[venus:children]
+monitoring
+
+[letsencrypt:children]
+loadbalancer
+
+# Additional control implemented here. These groups allow you to control which
+# services run on which hosts at a per-service level.
+#
+# Word of caution: Some services are required to run on the same host to
+# function appropriately. For example, neutron-metadata-agent must run on the
+# same host as the l3-agent and (depending on configuration) the dhcp-agent.
+
+# Common
+[cron:children]
+common
+
+[fluentd:children]
+common
+
+[kolla-logs:children]
+common
+
+[kolla-toolbox:children]
+common
+
+[opensearch:children]
+control
+
+# Opensearch dashboards
+[opensearch-dashboards:children]
+opensearch
+
+# Glance
+[glance-api:children]
+glance
+
+# Nova
+[nova-api:children]
+nova
+
+[nova-conductor:children]
+nova
+
+[nova-super-conductor:children]
+nova
+
+[nova-novncproxy:children]
+nova
+
+[nova-scheduler:children]
+nova
+
+[nova-spicehtml5proxy:children]
+nova
+
+[nova-compute-ironic:children]
+nova
+
+[nova-serialproxy:children]
+nova
+
+# Neutron
+[neutron-server:children]
+control
+
+[neutron-dhcp-agent:children]
+neutron
+
+[neutron-l3-agent:children]
+neutron
+
+[neutron-metadata-agent:children]
+neutron
+
+[neutron-ovn-metadata-agent:children]
+compute
+network
+
+[neutron-bgp-dragent:children]
+neutron
+
+[neutron-infoblox-ipam-agent:children]
+neutron
+
+[neutron-metering-agent:children]
+neutron
+
+[ironic-neutron-agent:children]
+neutron
+
+[neutron-ovn-agent:children]
+compute
+network
+
+# Cinder
+[cinder-api:children]
+cinder
+
+[cinder-backup:children]
+storage
+
+[cinder-scheduler:children]
+cinder
+
+[cinder-volume:children]
+storage
+
+# Cloudkitty
+[cloudkitty-api:children]
+cloudkitty
+
+[cloudkitty-processor:children]
+cloudkitty
+
+# iSCSI
+[iscsid:children]
+compute
+storage
+ironic
+
+[tgtd:children]
+storage
+
+# Manila
+[manila-api:children]
+manila
+
+[manila-scheduler:children]
+manila
+
+[manila-share:children]
+network
+
+[manila-data:children]
+manila
+
+# Swift
+[swift-proxy-server:children]
+swift
+
+[swift-account-server:children]
+storage
+
+[swift-container-server:children]
+storage
+
+[swift-object-server:children]
+storage
+
+# Barbican
+[barbican-api:children]
+barbican
+
+[barbican-keystone-listener:children]
+barbican
+
+[barbican-worker:children]
+barbican
+
+# Heat
+[heat-api:children]
+heat
+
+[heat-api-cfn:children]
+heat
+
+[heat-engine:children]
+heat
+
+# Ironic
+[ironic-api:children]
+ironic
+
+[ironic-conductor:children]
+ironic
+
+[ironic-inspector:children]
+ironic
+
+[ironic-tftp:children]
+ironic
+
+[ironic-http:children]
+ironic
+
+# Magnum
+[magnum-api:children]
+magnum
+
+[magnum-conductor:children]
+magnum
+
+# Mistral
+[mistral-api:children]
+mistral
+
+[mistral-executor:children]
+mistral
+
+[mistral-engine:children]
+mistral
+
+[mistral-event-engine:children]
+mistral
+
+# Ceilometer
+[ceilometer-central:children]
+ceilometer
+
+[ceilometer-notification:children]
+ceilometer
+
+[ceilometer-compute:children]
+compute
+
+[ceilometer-ipmi:children]
+compute
+
+# Aodh
+[aodh-api:children]
+aodh
+
+[aodh-evaluator:children]
+aodh
+
+[aodh-listener:children]
+aodh
+
+[aodh-notifier:children]
+aodh
+
+# Cyborg
+[cyborg-api:children]
+cyborg
+
+[cyborg-agent:children]
+compute
+
+[cyborg-conductor:children]
+cyborg
+
+# Gnocchi
+[gnocchi-api:children]
+gnocchi
+
+[gnocchi-statsd:children]
+gnocchi
+
+[gnocchi-metricd:children]
+gnocchi
+
+# Trove
+[trove-api:children]
+trove
+
+[trove-conductor:children]
+trove
+
+[trove-taskmanager:children]
+trove
+
+# Multipathd
+[multipathd:children]
+compute
+storage
+
+# Watcher
+[watcher-api:children]
+watcher
+
+[watcher-engine:children]
+watcher
+
+[watcher-applier:children]
+watcher
+
+# Octavia
+[octavia-api:children]
+octavia
+
+[octavia-driver-agent:children]
+octavia
+
+[octavia-health-manager:children]
+octavia
+
+[octavia-housekeeping:children]
+octavia
+
+[octavia-worker:children]
+octavia
+
+# Designate
+[designate-api:children]
+designate
+
+[designate-central:children]
+designate
+
+[designate-producer:children]
+designate
+
+[designate-mdns:children]
+network
+
+[designate-worker:children]
+designate
+
+[designate-sink:children]
+designate
+
+[designate-backend-bind9:children]
+designate
+
+# Placement
+[placement-api:children]
+placement
+
+# Zun
+[zun-api:children]
+zun
+
+[zun-wsproxy:children]
+zun
+
+[zun-compute:children]
+compute
+
+[zun-cni-daemon:children]
+compute
+
+# Skyline
+[skyline-apiserver:children]
+skyline
+
+[skyline-console:children]
+skyline
+
+# Tacker
+[tacker-server:children]
+tacker
+
+[tacker-conductor:children]
+tacker
+
+# Blazar
+[blazar-api:children]
+blazar
+
+[blazar-manager:children]
+blazar
+
+# Prometheus
+[prometheus-node-exporter:children]
+monitoring
+control
+compute
+network
+storage
+
+[prometheus-mysqld-exporter:children]
+mariadb
+
+[prometheus-memcached-exporter:children]
+memcached
+
+[prometheus-cadvisor:children]
+monitoring
+control
+compute
+network
+storage
+
+[prometheus-alertmanager:children]
+monitoring
+
+[prometheus-openstack-exporter:children]
+monitoring
+
+[prometheus-elasticsearch-exporter:children]
+opensearch
+
+[prometheus-blackbox-exporter:children]
+monitoring
+
+[prometheus-libvirt-exporter:children]
+compute
+
+[prometheus-msteams:children]
+prometheus-alertmanager
+
+[masakari-api:children]
+control
+
+[masakari-engine:children]
+control
+
+[masakari-hostmonitor:children]
+control
+
+[masakari-instancemonitor:children]
+compute
+
+[ovn-controller:children]
+ovn-controller-compute
+ovn-controller-network
+
+[ovn-controller-compute:children]
+compute
+
+[ovn-controller-network:children]
+network
+
+[ovn-database:children]
+control
+
+[ovn-northd:children]
+ovn-database
+
+[ovn-nb-db:children]
+ovn-database
+
+[ovn-sb-db:children]
+ovn-database
+
+[venus-api:children]
+venus
+
+[venus-manager:children]
+venus
+
+[letsencrypt-webserver:children]
+letsencrypt
+
+[letsencrypt-lego:children]
+letsencrypt
+
+[ovn-bgp-agent:children]
+control
+compute
+EOF
+
+    log_success "Kolla configuration files created!"
+}
 
 # =============================================================================
 # Phase 4: Setup VIP on Controllers
@@ -1027,125 +1727,11 @@ run_post_deploy() {
 }
 
 # =============================================================================
-# Phase 10: Configure RadosGW Keystone Integration
-# =============================================================================
-# WHY: By default RGW uses its own auth. For OpenStack Swift integration:
-# 1. RGW needs Keystone credentials to validate user tokens
-# 2. Swift endpoints must have /swift prefix (RGW expects this path)
-# Without this: `openstack container list` returns 401 Unauthorized
-
-configure_rgw_keystone() {
-    log_section "Phase 10: Configuring RadosGW Keystone Integration"
-
-    source "$KOLLA_VENV/bin/activate"
-    source "$KOLLA_CONFIG/admin-openrc.sh"
-
-    # Check if RGW is deployed
-    local rgw_found=false
-    for node in "${ALL_NODES[@]}"; do
-        if run_on_node "$node" "sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -q rgw" 2>/dev/null; then
-            rgw_found=true
-            break
-        fi
-    done
-
-    if [ "$rgw_found" = false ]; then
-        log_warning "No RadosGW containers found - skipping Keystone integration"
-        return 0
-    fi
-
-    # Step 1: Create Keystone user for RGW (service account to validate tokens)
-    log_info "Creating Keystone service user for RadosGW..."
-    local RGW_KEYSTONE_PASSWORD="rgw_keystone_$(openssl rand -hex 8)"
-
-    if ! openstack user show rgw &>/dev/null; then
-        openstack user create --domain default --password "$RGW_KEYSTONE_PASSWORD" rgw
-        openstack role add --project service --user rgw admin
-        log_success "Keystone user 'rgw' created"
-    else
-        openstack user set --password "$RGW_KEYSTONE_PASSWORD" rgw
-        log_info "Keystone user 'rgw' exists - password updated"
-    fi
-
-    # Step 2: Remove any existing client.rgw overrides (they take precedence over global)
-    log_info "Clearing any existing client.rgw Keystone overrides..."
-    run_on_node_sudo "${CEPH_ADMIN_IP}" "cephadm shell -- bash -c '
-        ceph config rm client.rgw rgw_keystone_admin_password 2>/dev/null || true
-        ceph config rm client.rgw rgw_keystone_admin_user 2>/dev/null || true
-        ceph config rm client.rgw rgw_keystone_admin_project 2>/dev/null || true
-        ceph config rm client.rgw rgw_keystone_admin_domain 2>/dev/null || true
-        ceph config rm client.rgw rgw_keystone_accepted_roles 2>/dev/null || true
-        ceph config rm client.rgw rgw_keystone_accepted_admin_roles 2>/dev/null || true
-        ceph config rm client.rgw rgw_keystone_api_version 2>/dev/null || true
-        ceph config rm client.rgw rgw_keystone_url 2>/dev/null || true
-        ceph config rm client.rgw rgw_swift_account_in_url 2>/dev/null || true
-        ceph config rm client.rgw rgw_s3_auth_use_keystone 2>/dev/null || true
-    '" 2>/dev/null || true
-
-    # Step 3: Configure RGW with Keystone settings (global section)
-    log_info "Configuring RadosGW with Keystone authentication..."
-    run_on_node_sudo "${CEPH_ADMIN_IP}" "cephadm shell -- bash -c '
-        ceph config set global rgw_keystone_url http://${VIP}:5000
-        ceph config set global rgw_keystone_api_version 3
-        ceph config set global rgw_keystone_admin_user rgw
-        ceph config set global rgw_keystone_admin_password ${RGW_KEYSTONE_PASSWORD}
-        ceph config set global rgw_keystone_admin_project service
-        ceph config set global rgw_keystone_admin_domain default
-        ceph config set global rgw_keystone_accepted_roles admin,member,_member_,reader
-        ceph config set global rgw_keystone_accepted_admin_roles admin
-        ceph config set global rgw_swift_account_in_url true
-        ceph config set global rgw_s3_auth_use_keystone true
-    '"
-    log_success "RadosGW Keystone config applied"
-
-    # Step 4: Restart RGW daemons (find the actual service name dynamically)
-    log_info "Restarting RadosGW daemons..."
-    local rgw_service
-    rgw_service=$(run_on_node_sudo "${CEPH_ADMIN_IP}" "cephadm shell -- ceph orch ls 2>/dev/null | grep '^rgw' | awk '{print \$1}'" 2>/dev/null | head -1)
-    if [ -n "$rgw_service" ]; then
-        run_on_node_sudo "${CEPH_ADMIN_IP}" "cephadm shell -- ceph orch restart $rgw_service" 2>/dev/null || true
-        log_info "Restarted service: $rgw_service"
-    else
-        log_warning "Could not find RGW service name - manual restart may be needed"
-    fi
-    sleep 20
-
-    # Step 5: Fix Swift endpoints (add /swift prefix)
-    log_info "Updating Swift endpoints with /swift prefix..."
-    local swift_endpoints
-    swift_endpoints=$(openstack endpoint list --service swift -f value -c ID 2>/dev/null || true)
-
-    if [ -n "$swift_endpoints" ]; then
-        for endpoint_id in $swift_endpoints; do
-            local current_url
-            current_url=$(openstack endpoint show "$endpoint_id" -f value -c url 2>/dev/null)
-            if [[ "$current_url" != *"/swift/"* ]] && [[ "$current_url" == *"/v1/"* ]]; then
-                local new_url="${current_url/\/v1\//\/swift\/v1\/}"
-                openstack endpoint set --url "$new_url" "$endpoint_id"
-                log_info "  Updated endpoint: $new_url"
-            fi
-        done
-        log_success "Swift endpoints updated"
-    else
-        log_warning "No Swift endpoints found"
-    fi
-
-    # Step 6: Verify
-    log_info "Verifying RadosGW Keystone integration..."
-    sleep 5
-    if openstack container list &>/dev/null; then
-        log_success "RadosGW Keystone integration working!"
-    else
-        log_warning "Swift API test failed - may need manual verification"
-    fi
-}
-
-# =============================================================================
-# Phase 11: Verify Deployment
+# Phase 10: Verify Deployment
 # =============================================================================
 
 verify_deployment() {
-    log_section "Phase 11: Verifying Deployment"
+    log_section "Phase 10: Verifying Deployment"
 
     source "$KOLLA_VENV/bin/activate"
     source "$KOLLA_CONFIG/admin-openrc.sh"
@@ -1185,16 +1771,11 @@ main() {
     echo -e "${GREEN}OpenStack Deployment with Kolla-Ansible and Ceph${NC}"
     echo "============================================================================="
     echo ""
-    echo "Configuration from: $CONFIG_FILE"
-    echo "  - Control Nodes: ${#CONTROLLERS[@]} (${CONTROLLERS[*]})"
-    echo "  - Compute Nodes: ${#COMPUTES[@]} (${COMPUTES[*]})"
-    if [ "${CONTROLLERS[*]}" == "${COMPUTES[*]}" ]; then
-        echo "  - Architecture:  Converged (same nodes for control and compute)"
-    else
-        echo "  - Architecture:  Separated (different control and compute nodes)"
-    fi
-    echo "  - VIP:           ${VIP}"
-    echo "  - Kolla dir:     ${KOLLA_CONFIG}"
+    echo "Configuration:"
+    echo "  - Controllers: ${CONTROLLERS[*]}"
+    echo "  - Compute:     ${COMPUTES[*]}"
+    echo "  - VIP:         ${VIP}"
+    echo "  - Kolla dir:   ${KOLLA_CONFIG}"
     echo ""
 
     # Run all phases (each is idempotent / safe to re-run)
@@ -1207,7 +1788,6 @@ main() {
     run_prechecks
     run_deploy
     run_post_deploy
-    configure_rgw_keystone
     verify_deployment
 }
 
@@ -1250,9 +1830,6 @@ case "${1:-}" in
         ;;
     post-deploy)
         run_post_deploy
-        ;;
-    rgw-keystone)
-        configure_rgw_keystone
         ;;
     verify)
         verify_deployment

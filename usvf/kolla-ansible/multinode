@@ -1,36 +1,44 @@
-# These initial groups are the only groups required to be modified. The
-# additional groups are for more control of the environment.
+# ============================================================================
+# OpenStack Multinode Inventory - AUTO-GENERATED TEMPLATE
+# ============================================================================
+# NOTE: This file serves as a TEMPLATE. When you run openstack-deploy.sh,
+# it will generate /etc/kolla/multinode based on values from config.sh
+#
+# The [control], [network], [compute], [monitoring], [storage] sections below
+# are just examples - they will be REPLACED with actual values from config.sh
+#
+# Everything from [deployment] onwards will be PRESERVED as-is.
+# ============================================================================
+
+# Example for 3-node converged setup (same nodes for control and compute):
 [control]
-# These hostname must be resolvable from your deployment host
-control01 ansible_host=192.168.10.11 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.1 tunnel_ip=10.1.0.1
-control02 ansible_host=192.168.10.12 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.2 tunnel_ip=10.1.0.2
-control03 ansible_host=192.168.10.13 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.3 tunnel_ip=10.1.0.3
+control01 ansible_host=192.168.10.11 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.1 tunnel_ip=10.1.0.1
+control02 ansible_host=192.168.10.12 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.2 tunnel_ip=10.1.0.2
+control03 ansible_host=192.168.10.13 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.3 tunnel_ip=10.1.0.3
 
-# The above can also be specified as follows:
-#control[01:03]     ansible_user=kolla
-
-# The network nodes are where your l3-agent and loadbalancers will run
-# This can be the same as a host in the control group
 [network]
 control01
 control02
 control03
 
 [compute]
-compute01 ansible_host=192.168.10.14 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.4 tunnel_ip=10.1.0.4
-compute02 ansible_host=192.168.10.15 ansible_user=ubuntu ansible_become=true api_ip=10.1.0.5 tunnel_ip=10.1.0.5
+# For 3-node converged: same nodes as control
+# compute01 ansible_host=192.168.10.11 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.1 tunnel_ip=10.1.0.1
+# compute02 ansible_host=192.168.10.12 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.2 tunnel_ip=10.1.0.2
+# compute03 ansible_host=192.168.10.13 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.3 tunnel_ip=10.1.0.3
+
+# For 5-node separated setup, compute would be:
+compute01 ansible_host=192.168.10.14 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.4 tunnel_ip=10.1.0.4
+compute02 ansible_host=192.168.10.15 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.5 tunnel_ip=10.1.0.5
 
 [monitoring]
 control01
 
-# When compute nodes and control nodes use different interfaces,
-# you need to comment out "api_interface" and other interfaces from the globals.yml
-# and specify like below:
-#compute01 neutron_external_interface=eth0 api_interface=em1 tunnel_interface=em1
-
 [storage]
+# For 3-node converged: same nodes as compute
 compute01
 compute02
+#compute03
 
 [deployment]
 localhost       ansible_connection=local

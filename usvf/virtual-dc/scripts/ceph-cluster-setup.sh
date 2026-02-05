@@ -2,14 +2,25 @@
 #
 # Ceph Cluster One-Click Setup Script
 # Architecture:
-#   Control Plane (MON/MGR): hypervisor-1, hypervisor-2, hypervisor-3
-#   Data Plane (OSD): hypervisor-4, hypervisor-5
+#   Flexible: Control and compute nodes configured via config.sh
+#   Supports both converged (same nodes) and separated (different nodes) deployments
 #
-# Run this script from: hetzner machine
+# Run this script from: deployment host
 # Usage: ./ceph-cluster-setup.sh
 #
 
 set -e
+
+# Source centralized configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$(dirname "$(dirname "$SCRIPT_DIR")")/config.sh"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "ERROR: config.sh not found at $CONFIG_FILE"
+    echo "Please create config.sh based on the template"
+    echo "Expected location: /Users/sushantpatrikar/usvf/usvf/config.sh"
+    exit 1
+fi
+source "$CONFIG_FILE"
 
 # Colors for output
 RED='\033[0;31m'
@@ -46,33 +57,22 @@ done
 #     exit 1
 # fi
 
-# Configuration (derived from subnet)
-# Note: We use IPs for SSH to support multiple datacenters (dc1=.10, dc2=.11, etc.)
-BOOTSTRAP_HOST="192.168.10.11"
-BOOTSTRAP_IP="192.168.10.11"
-CONTROL_HOSTS=("192.168.10.11" "192.168.10.12" "192.168.10.13")
-CONTROL_IPS=("192.168.10.11" "192.168.10.12" "192.168.10.13")
-OSD_HOSTS=("192.168.10.14" "192.168.10.15")
-OSD_IPS=("192.168.10.14" "192.168.10.15")
-ALL_HOSTS=("192.168.10.11" "192.168.10.12" "192.168.10.13" "192.168.10.14" "192.168.10.15")
+# Configuration from config.sh
+# Note: We use IPs for SSH to support multiple datacenters
+# CONTROL_HOSTS: Nodes that run Ceph MON/MGR
+# OSD_HOSTS: Nodes that run Ceph OSD (can be same as control for converged setup)
+CONTROL_HOSTS=("${CONTROL_IPS[@]}")
+OSD_HOSTS=("${COMPUTE_IPS[@]}")
+ALL_HOSTS=("${ALL_IPS[@]}")
 
 # Hostnames for Ceph (used in ceph orch host add)
-CONTROL_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3")
-OSD_NAMES=("hypervisor-4" "hypervisor-5")
-ALL_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3" "hypervisor-4" "hypervisor-5")
+# These are also from config.sh
 
-# SSH configuration
-SSH_USER="ubuntu"
-# Map subnet to DC name: 192.168.10 -> dc1, 192.168.11 -> dc2, etc.
-SUBNET_OCTET="${SUBNET_BASE##*.}"  # Extract last octet (10, 11, etc.)
-SSH_KEY="/root/usvf/usvf/virtual-dc/config/vdc-dc1/ssh-keys/id_rsa"
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY}"
+# Bootstrap and admin node (first control node)
+# BOOTSTRAP_HOST, BOOTSTRAP_IP, SSH_USER, SSH_KEY, SSH_OPTS already defined in config.sh
 
-# RBD and RGW Configuration
-RBD_POOL="rbd_data"
-RBD_USER="rbduser"
-RGW_USER="s3user"
-RGW_PORT=8000
+# RBD and RGW Configuration (from config.sh)
+# RBD_POOL, RBD_USER, RGW_USER, RGW_PORT already defined in config.sh
 
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -94,8 +94,30 @@ run_on_host() {
 }
 
 run_ceph_cmd() {
-    # Run ceph command via cephadm shell on bootstrap host
-    ssh ${SSH_OPTS} ${SSH_USER}@${BOOTSTRAP_HOST} "sudo cephadm shell -- $*"
+    # Run ceph command - use direct command if possible (faster), fallback to cephadm shell
+    # After ceph-common is installed and configs are exported, we can use direct commands
+    #
+    # Callers pass full commands like: run_ceph_cmd ceph orch apply mon ...
+    # or non-ceph commands like: run_ceph_cmd rbd create ...
+    # We need to handle both paths correctly.
+
+    local args="$*"
+
+    # Check if ceph.conf exists on bootstrap host (means cluster is bootstrapped and configs exported)
+    if ssh ${SSH_OPTS} ${SSH_USER}@${BOOTSTRAP_HOST} "test -f /etc/ceph/ceph.conf && which ceph >/dev/null 2>&1" 2>/dev/null; then
+        # Use direct command (much faster - no container spawn)
+        # Strip leading 'ceph ' if present since we add --conf/--keyring flags
+        if [[ "$args" == ceph\ * ]]; then
+            local ceph_args="${args#ceph }"
+            ssh ${SSH_OPTS} ${SSH_USER}@${BOOTSTRAP_HOST} "sudo ceph --conf /etc/ceph/ceph.conf --keyring /etc/ceph/ceph.client.admin.keyring $ceph_args"
+        else
+            # Non-ceph commands (rbd, radosgw-admin, etc.) - pass as-is
+            ssh ${SSH_OPTS} ${SSH_USER}@${BOOTSTRAP_HOST} "sudo $args"
+        fi
+    else
+        # Fallback to cephadm shell (during bootstrap before configs are exported)
+        ssh ${SSH_OPTS} ${SSH_USER}@${BOOTSTRAP_HOST} "sudo cephadm shell -- $args"
+    fi
 }
 
 wait_for_health() {
@@ -300,22 +322,32 @@ phase1_prerequisites() {
     done
 
     for host in "${ALL_HOSTS[@]}"; do
-        log_info "Installing docker.io and ceph-common on $host..."
+        log_info "Installing prerequisites on $host..."
         # First fix any dpkg interruption issues
         ssh ${SSH_OPTS} ${SSH_USER}@"$host" "sudo dpkg --configure -a 2>/dev/null" || true
 
-        # Retry logic for installation
+        # Install Docker: skip docker.io if docker-ce is already installed (e.g. by Kolla bootstrap)
+        if ssh ${SSH_OPTS} ${SSH_USER}@"$host" "dpkg -l docker-ce 2>/dev/null | grep -q ^ii" 2>/dev/null; then
+            log_info "  docker-ce already installed on $host, skipping docker.io"
+        else
+            log_info "  Installing docker.io on $host..."
+            ssh ${SSH_OPTS} ${SSH_USER}@"$host" "sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io" 2>/dev/null || {
+                log_warn "docker.io install failed on $host, checking if docker is already available..."
+            }
+        fi
+
+        # Install ceph-common separately (so docker conflict doesn't block it)
+        log_info "  Installing ceph-common on $host..."
         local max_retries=3
         local retry=0
         local success=false
         while [ $retry -lt $max_retries ]; do
-            if ssh ${SSH_OPTS} ${SSH_USER}@"$host" "sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io ceph-common" 2>/dev/null; then
+            if ssh ${SSH_OPTS} ${SSH_USER}@"$host" "sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ceph-common" 2>/dev/null; then
                 success=true
                 break
             fi
             retry=$((retry + 1))
-            log_warn "Retry $retry/$max_retries for $host..."
-            # Fix dpkg again before retry
+            log_warn "Retry $retry/$max_retries for ceph-common on $host..."
             ssh ${SSH_OPTS} ${SSH_USER}@"$host" "sudo dpkg --configure -a 2>/dev/null" || true
             sleep 10
         done
@@ -323,6 +355,12 @@ phase1_prerequisites() {
         # Verify docker is actually installed
         if ! ssh ${SSH_OPTS} ${SSH_USER}@"$host" "which docker > /dev/null 2>&1"; then
             log_error "Docker installation failed on $host!"
+            exit 1
+        fi
+
+        # Verify ceph-common is installed
+        if ! ssh ${SSH_OPTS} ${SSH_USER}@"$host" "which ceph > /dev/null 2>&1"; then
+            log_error "ceph-common installation failed on $host!"
             exit 1
         fi
         
@@ -359,7 +397,7 @@ EOF'
 
     log_info "Installing cephadm on $BOOTSTRAP_HOST..."
     # Wait for apt on bootstrap host again
-    wait_for_apt "$BOOTSTRAP_HOST" || true
+    wait_for_apt_lock "$BOOTSTRAP_HOST" || true
 
     # Try apt first, then download directly if apt fails
     run_on_host "$BOOTSTRAP_HOST" "
@@ -427,27 +465,31 @@ phase3_distribute_keys() {
 phase4_add_hosts() {
     log_info "=== PHASE 4: Adding hosts to Ceph cluster ==="
 
-    # Add all hosts using names and IPs
+    # Add all unique hosts using names and IPs
     for i in "${!ALL_NAMES[@]}"; do
         name="${ALL_NAMES[$i]}"
-        ip="${ALL_HOSTS[$i]}"
+        ip="${ALL_IPS[$i]}"
 
         log_info "Adding $name ($ip) to cluster..."
         run_ceph_cmd ceph orch host add "$name" "$ip" 2>/dev/null || log_warn "$name may already be added"
     done
 
-    # Add labels to control plane hosts
+    # Add labels to control plane hosts (MON/MGR will run here)
+    log_info "Labeling control nodes..."
     for name in "${CONTROL_NAMES[@]}"; do
-        log_info "Labeling $name as 'control'..."
+        log_info "  Labeling $name as 'control'..."
         run_ceph_cmd ceph orch host label add "$name" control 2>/dev/null || true
     done
 
-    # Add labels to OSD hosts
-    for name in "${OSD_NAMES[@]}"; do
-        log_info "Labeling $name as 'osd'..."
+    # Add labels to OSD hosts (OSDs will run here)
+    log_info "Labeling compute/OSD nodes..."
+    for name in "${COMPUTE_NAMES[@]}"; do
+        log_info "  Labeling $name as 'osd'..."
         run_ceph_cmd ceph orch host label add "$name" osd 2>/dev/null || true
     done
 
+    # Note: In converged setup, nodes will have BOTH labels
+    # In separated setup, nodes will have only their respective label
     log_info "Phase 4 complete: Hosts added and labeled"
 }
 
@@ -520,15 +562,27 @@ EOF
 phase7_create_rbd() {
     log_info "=== PHASE 7: Configuring pools and creating RBD pool ==="
 
-    # Set default pool size to 2 (since we have 2 OSDs)
-    log_info "Setting default pool size to 2 for 2-OSD cluster..."
-    run_ceph_cmd ceph config set global osd_pool_default_size 2
+    # Dynamically determine pool size based on OSD count
+    OSD_COUNT=$(run_ceph_cmd ceph osd stat 2>/dev/null | grep -oP '\d+(?= osds)' || echo "0")
+    log_info "Detected $OSD_COUNT OSD(s) in cluster"
+
+    # Determine pool size: use 3 if we have 3+ OSDs, otherwise use 2
+    if [ "$OSD_COUNT" -ge 3 ]; then
+        POOL_SIZE=3
+        log_info "Setting pool size to 3 for $OSD_COUNT-OSD cluster (3-way replication)"
+    else
+        POOL_SIZE=2
+        log_info "Setting pool size to 2 for $OSD_COUNT-OSD cluster (2-way replication)"
+    fi
+
+    # Set default pool configuration
+    run_ceph_cmd ceph config set global osd_pool_default_size $POOL_SIZE
     run_ceph_cmd ceph config set global osd_pool_default_min_size 1
 
-    # Set existing pools to size 2
-    log_info "Configuring existing pools with size=2..."
+    # Update existing pools
+    log_info "Configuring existing pools with size=$POOL_SIZE..."
     for pool in $(run_ceph_cmd ceph osd pool ls 2>/dev/null); do
-        run_ceph_cmd ceph osd pool set "$pool" size 2 --yes-i-really-mean-it 2>/dev/null || true
+        run_ceph_cmd ceph osd pool set "$pool" size $POOL_SIZE --yes-i-really-mean-it 2>/dev/null || true
         run_ceph_cmd ceph osd pool set "$pool" min_size 1 2>/dev/null || true
     done
 
@@ -562,15 +616,13 @@ phase8_deploy_rgw() {
     if run_ceph_cmd ceph orch ps --daemon-type rgw 2>/dev/null | grep -q "running"; then
         log_warn "RGW already running, skipping deployment"
     else
-        log_info "Deploying RGW on OSD hosts (port $RGW_PORT)..."
-        # Create RGW spec and apply via stdin
+        log_info "Deploying RGW on OSD nodes (port $RGW_PORT)..."
+        # Create RGW spec and apply via stdin - uses 'osd' label for flexible placement
         cat <<EOF | ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo cephadm shell -- ceph orch apply -i -"
 service_type: rgw
 service_id: s3-gw
 placement:
-  hosts:
-    - hypervisor-4
-    - hypervisor-5
+  label: osd
 spec:
   rgw_frontend_port: $RGW_PORT
 EOF
@@ -643,23 +695,49 @@ Endpoint: http://192.168.10.14:$RGW_PORT or http://192.168.10.15:$RGW_PORT' | su
 phase9_export_configs() {
     log_info "=== PHASE 9: Exporting configs for OpenStack integration ==="
 
+    # IMPORTANT: Use cephadm shell for export operations to avoid race conditions.
+    # Piping run_ceph_cmd to tee on the same host can truncate the config file
+    # before ceph finishes reading it. Use cephadm shell which doesn't depend on host config.
+
     # Get FSID
-    FSID=$(run_ceph_cmd ceph fsid)
+    FSID=$(ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo cephadm shell -- ceph fsid" 2>/dev/null)
     log_info "Cluster FSID: $FSID"
 
-    # Export ceph.conf to host
+    # Export ceph.conf - capture first, then write (avoids race condition)
     log_info "Exporting ceph.conf to $BOOTSTRAP_HOST:/etc/ceph/ceph.conf..."
-    run_ceph_cmd ceph config generate-minimal-conf | ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo tee /etc/ceph/ceph.conf > /dev/null"
+    local CEPH_CONF
+    CEPH_CONF=$(ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo cephadm shell -- ceph config generate-minimal-conf" 2>/dev/null)
+    if [ -n "$CEPH_CONF" ]; then
+        echo "$CEPH_CONF" | ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo tee /etc/ceph/ceph.conf > /dev/null"
+        log_info "ceph.conf exported successfully"
+    else
+        log_error "Failed to generate ceph.conf!"
+        return 1
+    fi
 
-    # Export admin keyring
+    # Export admin keyring - capture first, then write
     log_info "Exporting admin keyring..."
-    run_ceph_cmd ceph auth get client.admin | ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo tee /etc/ceph/ceph.client.admin.keyring > /dev/null"
-    ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo chmod 600 /etc/ceph/ceph.client.admin.keyring"
+    local ADMIN_KEY
+    ADMIN_KEY=$(ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo cephadm shell -- ceph auth get client.admin" 2>/dev/null)
+    if [ -n "$ADMIN_KEY" ]; then
+        echo "$ADMIN_KEY" | ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo tee /etc/ceph/ceph.client.admin.keyring > /dev/null"
+        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo chmod 600 /etc/ceph/ceph.client.admin.keyring"
+    else
+        log_error "Failed to export admin keyring!"
+        return 1
+    fi
 
-    # Export RBD user keyring
+    # Export RBD user keyring - capture first, then write
     log_info "Exporting $RBD_USER keyring..."
-    run_ceph_cmd ceph auth get client.$RBD_USER | ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo tee /etc/ceph/ceph.client.$RBD_USER.keyring > /dev/null"
-    ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo chmod 600 /etc/ceph/ceph.client.$RBD_USER.keyring"
+    local RBD_KEY
+    RBD_KEY=$(ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo cephadm shell -- ceph auth get client.$RBD_USER" 2>/dev/null)
+    if [ -n "$RBD_KEY" ]; then
+        echo "$RBD_KEY" | ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo tee /etc/ceph/ceph.client.$RBD_USER.keyring > /dev/null"
+        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo chmod 600 /etc/ceph/ceph.client.$RBD_USER.keyring"
+    else
+        log_error "Failed to export $RBD_USER keyring!"
+        return 1
+    fi
 
     log_info "Phase 9 complete: Configs exported"
 }
@@ -780,9 +858,15 @@ main() {
     echo "       Ceph Cluster One-Click Setup"
     echo "============================================================"
     echo ""
-    echo "Subnet:        192.168.10.0/24"
-    echo "Control Plane: ${CONTROL_HOSTS[*]} (${CONTROL_IPS[*]})"
-    echo "Data Plane:    ${OSD_HOSTS[*]} (${OSD_IPS[*]})"
+    echo "Configuration from: $CONFIG_FILE"
+    echo "Control Nodes (MON/MGR): ${#CONTROL_HOSTS[@]} nodes (${CONTROL_IPS[*]})"
+    echo "OSD Nodes (Storage):     ${#OSD_HOSTS[@]} nodes (${COMPUTE_IPS[*]})"
+    echo "Unique Nodes:            ${#ALL_HOSTS[@]} (${ALL_IPS[*]})"
+    if [ "${CONTROL_IPS[*]}" == "${COMPUTE_IPS[*]}" ]; then
+        echo "Architecture:            Converged (same nodes for control and storage)"
+    else
+        echo "Architecture:            Separated (different control and storage nodes)"
+    fi
     echo ""
 
     phase0_fix_ssh_keys

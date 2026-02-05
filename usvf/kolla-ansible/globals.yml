@@ -6,6 +6,10 @@ kolla_base_distro: "ubuntu"
 kolla_install_type: "source"
 openstack_release: "2024.1"
 
+# Fix for Ubuntu Noble (24.04) which uses Python 3.12
+# Kolla-Ansible defaults to "3" but Noble containers have python3.12
+distro_python_version: "3.12"
+
 # ========================
 # 2. Networking (Underlay)
 # ========================
@@ -55,6 +59,7 @@ enable_horizon: "yes"
 enable_heat: "yes"
 enable_fluentd: "yes"
 enable_cinder: "yes"
+cinder_cluster_name: "ceph"
 
 # ========================
 # 7. Ceph Configuration (External Cluster)
@@ -84,3 +89,47 @@ nova_backend_ceph: "yes"
 ceph_nova_keyring: "client.nova.keyring"
 ceph_nova_user: "nova"
 ceph_nova_pool_name: "vms"
+
+# ========================
+# 8. Ceph RadosGW - Object Storage (Swift API Compatible)
+# ========================
+# Enable Ceph RadosGW integration for Object Store (Containers) in Horizon
+enable_ceph_rgw: "yes"
+
+# Enable Swift API compatibility on RadosGW
+# This allows Horizon to show Object Store > Containers panel
+ceph_rgw_swift_compatibility: "yes"
+
+# Enable load balancing for RadosGW endpoints via HAProxy
+enable_ceph_rgw_loadbalancer: "yes"
+
+# RadosGW hosts and ports
+# IMPORTANT: Update these based on your deployment:
+#
+# For 3-node converged (current): RGW runs on hypervisor-1,2,3 (192.168.10.11-13)
+# For 5-node separated: RGW runs on hypervisor-4,5 (192.168.10.14-15)
+#
+# Current configuration for 3-node setup:
+ceph_rgw_hosts:
+  - host: 192.168.10.14
+    port: 7480
+  - host: 192.168.10.15
+    port: 7480
+
+
+# For 5-node setup, replace above with:
+# ceph_rgw_hosts:
+#   - host: 192.168.10.14
+#     port: 7480
+#   - host: 192.168.10.15
+#     port: 7480
+
+# HAProxy frontend port for RadosGW (accessible via VIP)
+# Port 6780 is the default and is not used by any other OpenStack service
+ceph_rgw_port: 6780
+
+# Enable Keystone integration for RadosGW (required for Horizon authentication)
+enable_ceph_rgw_keystone: "yes"
+
+# Swift account in URL (should match RadosGW rgw_swift_account_in_url setting)
+ceph_rgw_swift_account_in_url: "yes"
