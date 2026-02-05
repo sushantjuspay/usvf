@@ -120,6 +120,19 @@ run_ceph_cmd() {
     fi
 }
 
+# Configure Ceph public network (optional - for separating client traffic)
+configure_ceph_networks() {
+    # Skip if no network configuration specified
+    if [[ -z "$CEPH_PUBLIC_NETWORK" ]]; then
+        log_info "No separate Ceph public network configured - using management network"
+        return 0
+    fi
+
+    log_info "Configuring Ceph public network: $CEPH_PUBLIC_NETWORK"
+    run_ceph_cmd ceph config set global public_network "$CEPH_PUBLIC_NETWORK"
+    log_info "Ceph public network configuration complete"
+}
+
 wait_for_health() {
     local max_attempts=${1:-60}
     local attempt=0
@@ -436,6 +449,9 @@ phase2_bootstrap() {
 
     log_info "Bootstrapping Ceph on $BOOTSTRAP_HOST ($BOOTSTRAP_IP)..."
     run_on_host "$BOOTSTRAP_HOST" "sudo cephadm bootstrap --mon-ip $BOOTSTRAP_IP --skip-monitoring-stack"
+
+    # Configure public network if specified (for separating client traffic from management)
+    configure_ceph_networks
 
     log_info "Phase 2 complete: Ceph bootstrapped"
 }

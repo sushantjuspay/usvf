@@ -39,6 +39,11 @@ RBD_USER="rbduser"                  # RBD user
 RGW_USER="s3user"                   # S3/RadosGW user
 RGW_PORT=7480                       # RadosGW port (changed from 8000 to avoid Heat CFN API conflict)
 
+# Ceph Public Network (optional - for separating client traffic from management)
+# Leave empty ("") to use management network for all Ceph traffic
+# Set to CIDR (e.g., "10.20.0.0/24") to use separate network for client ↔ Ceph traffic
+CEPH_PUBLIC_NETWORK=""
+
 # ----------------------------------------------------------------------------
 # OpenStack Configuration (Usually don't need to change)
 # ----------------------------------------------------------------------------
