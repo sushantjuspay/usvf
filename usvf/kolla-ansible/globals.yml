@@ -110,20 +110,20 @@ enable_ceph_rgw_loadbalancer: "yes"
 # For 5-node separated: RGW runs on hypervisor-4,5 (192.168.10.14-15)
 
 # Current configuration for 3-node converged setup:
-ceph_rgw_hosts:
-  - host: 192.168.10.11
-    port: 7480
-  - host: 192.168.10.12
-    port: 7480
-  - host: 192.168.10.13
-    port: 7480
+# ceph_rgw_hosts:
+#   - host: 192.168.10.11
+#     port: 7480
+#   - host: 192.168.10.12
+#     port: 7480
+#   - host: 192.168.10.13
+#     port: 7480
 
 # For 5-node separated setup, replace above with:
-# ceph_rgw_hosts:
-#   - host: 192.168.10.14
-#     port: 7480
-#   - host: 192.168.10.15
-#     port: 7480
+ceph_rgw_hosts:
+  - host: 192.168.10.14
+    port: 7480
+  - host: 192.168.10.15
+    port: 7480
 
 # HAProxy frontend port for RadosGW (accessible via VIP)
 # Port 6780 is the default and is not used by any other OpenStack service

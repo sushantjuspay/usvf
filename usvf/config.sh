@@ -17,8 +17,8 @@ CONTROL_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3")
 # Compute Nodes: Run Ceph OSD + OpenStack compute services
 # For 3-node converged: Same as control nodes
 # For separated: Add more IPs like ("192.168.10.14" "192.168.10.15" ...)
-COMPUTE_IPS=("192.168.10.11" "192.168.10.12" "192.168.10.13")
-COMPUTE_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3")
+COMPUTE_IPS=("192.168.10.14" "192.168.10.15")
+COMPUTE_NAMES=("hypervisor-4" "hypervisor-5")
 
 # SSH Configuration
 SSH_USER="ubuntu"

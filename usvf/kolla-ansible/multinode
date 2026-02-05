@@ -23,13 +23,13 @@ control03
 
 [compute]
 # For 3-node converged: same nodes as control
-compute01 ansible_host=192.168.10.11 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.1 tunnel_ip=10.1.0.1
-compute02 ansible_host=192.168.10.12 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.2 tunnel_ip=10.1.0.2
-compute03 ansible_host=192.168.10.13 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.3 tunnel_ip=10.1.0.3
+# compute01 ansible_host=192.168.10.11 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.1 tunnel_ip=10.1.0.1
+# compute02 ansible_host=192.168.10.12 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.2 tunnel_ip=10.1.0.2
+# compute03 ansible_host=192.168.10.13 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.3 tunnel_ip=10.1.0.3
 
 # For 5-node separated setup, compute would be:
-# compute01 ansible_host=192.168.10.14 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.4 tunnel_ip=10.1.0.4
-# compute02 ansible_host=192.168.10.15 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.5 tunnel_ip=10.1.0.5
+compute01 ansible_host=192.168.10.14 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.4 tunnel_ip=10.1.0.4
+compute02 ansible_host=192.168.10.15 ansible_user=ubuntu ansible_become=true ansible_ssh_private_key_file=/path/to/key api_ip=10.1.0.5 tunnel_ip=10.1.0.5
 
 [monitoring]
 control01
@@ -38,7 +38,7 @@ control01
 # For 3-node converged: same nodes as compute
 compute01
 compute02
-compute03
+# compute03
 
 [deployment]
 localhost       ansible_connection=local
