@@ -672,11 +672,17 @@ EOF
         echo "  Secret Key: $SECRET_KEY"
 
         # Save credentials to file on bootstrap host using echo (more reliable than heredoc over ssh)
+        # Build endpoint list dynamically from OSD_HOSTS
+        local endpoint_list=""
+        for host in "${OSD_HOSTS[@]}"; do
+            [ -n "$endpoint_list" ] && endpoint_list="$endpoint_list or "
+            endpoint_list="${endpoint_list}http://${host}:$RGW_PORT"
+        done
         ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "echo 'S3 User Credentials
 ===================
 Access Key: $ACCESS_KEY
 Secret Key: $SECRET_KEY
-Endpoint: http://192.168.10.14:$RGW_PORT or http://192.168.10.15:$RGW_PORT' | sudo tee /root/s3-credentials.txt > /dev/null"
+Endpoint: $endpoint_list' | sudo tee /root/s3-credentials.txt > /dev/null"
 
         log_info "Credentials saved to $BOOTSTRAP_HOST:/root/s3-credentials.txt"
     else
@@ -779,18 +785,16 @@ phase10_verify() {
 
     echo ""
     log_info "--- Test 6: S3 Connectivity Test ---"
-    # Test S3 endpoint from one of the OSD hosts
-    if curl -s --connect-timeout 5 "http://192.168.10.14:$RGW_PORT" > /dev/null 2>&1; then
-        log_info "S3 endpoint on hypervisor-4:$RGW_PORT is reachable"
-    else
-        log_warn "S3 endpoint on hypervisor-4:$RGW_PORT may not be ready yet"
-    fi
-
-    if curl -s --connect-timeout 5 "http://192.168.10.15:$RGW_PORT" > /dev/null 2>&1; then
-        log_info "S3 endpoint on hypervisor-5:$RGW_PORT is reachable"
-    else
-        log_warn "S3 endpoint on hypervisor-5:$RGW_PORT may not be ready yet"
-    fi
+    # Test S3 endpoint on each OSD host (RGW runs on osd-labeled nodes)
+    for i in "${!OSD_HOSTS[@]}"; do
+        local host="${OSD_HOSTS[$i]}"
+        local name="${COMPUTE_NAMES[$i]:-osd-$i}"
+        if curl -s --connect-timeout 5 "http://${host}:$RGW_PORT" > /dev/null 2>&1; then
+            log_info "S3 endpoint on ${name}:$RGW_PORT is reachable"
+        else
+            log_warn "S3 endpoint on ${name}:$RGW_PORT may not be ready yet"
+        fi
+    done
 
     echo ""
     log_info "--- Test 7: Host Status ---"
@@ -822,24 +826,25 @@ aws_access_key_id = $S3_ACCESS_KEY
 aws_secret_access_key = $S3_SECRET_KEY' | sudo tee /root/.aws/credentials > /dev/null && echo '[profile ceph]
 region = us-east-1' | sudo tee /root/.aws/config > /dev/null"
 
-        # Run S3 test as root
-        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url http://192.168.10.14:$RGW_PORT --profile ceph s3 mb s3://ceph-test-bucket" 2>&1 || true
+        # Run S3 test as root (use first OSD host as endpoint)
+        local S3_ENDPOINT="http://${OSD_HOSTS[0]}:$RGW_PORT"
+        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url $S3_ENDPOINT --profile ceph s3 mb s3://ceph-test-bucket" 2>&1 || true
         log_info "Created test bucket"
 
         ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "echo 'Hello from Ceph S3 automated test!' | sudo tee /tmp/s3-test.txt > /dev/null"
-        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url http://192.168.10.14:$RGW_PORT --profile ceph s3 cp /tmp/s3-test.txt s3://ceph-test-bucket/test.txt" 2>&1
+        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url $S3_ENDPOINT --profile ceph s3 cp /tmp/s3-test.txt s3://ceph-test-bucket/test.txt" 2>&1
         log_info "Uploaded test file"
 
         log_info "Listing bucket contents:"
-        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url http://192.168.10.14:$RGW_PORT --profile ceph s3 ls s3://ceph-test-bucket/" 2>&1
+        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url $S3_ENDPOINT --profile ceph s3 ls s3://ceph-test-bucket/" 2>&1
 
         log_info "Downloading and verifying:"
-        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url http://192.168.10.14:$RGW_PORT --profile ceph s3 cp s3://ceph-test-bucket/test.txt /tmp/s3-download.txt" 2>&1
+        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url $S3_ENDPOINT --profile ceph s3 cp s3://ceph-test-bucket/test.txt /tmp/s3-download.txt" 2>&1
         ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "cat /tmp/s3-download.txt"
 
         log_info "Cleaning up test bucket..."
-        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url http://192.168.10.14:$RGW_PORT --profile ceph s3 rm s3://ceph-test-bucket/test.txt" 2>&1 || true
-        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url http://192.168.10.14:$RGW_PORT --profile ceph s3 rb s3://ceph-test-bucket" 2>&1 || true
+        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url $S3_ENDPOINT --profile ceph s3 rm s3://ceph-test-bucket/test.txt" 2>&1 || true
+        ssh ${SSH_OPTS} ${SSH_USER}@"$BOOTSTRAP_HOST" "sudo /usr/local/bin/aws --endpoint-url $S3_ENDPOINT --profile ceph s3 rb s3://ceph-test-bucket" 2>&1 || true
 
         log_info "S3 test passed!"
     else
@@ -900,7 +905,7 @@ main() {
     echo ""
     echo "  4. To use S3 from $BOOTSTRAP_HOST:"
     echo "     ssh $BOOTSTRAP_HOST"
-    echo "     aws --endpoint-url http://192.168.10.14:$RGW_PORT --profile ceph s3 ls"
+    echo "     aws --endpoint-url http://${OSD_HOSTS[0]}:$RGW_PORT --profile ceph s3 ls"
     echo ""
 }
 

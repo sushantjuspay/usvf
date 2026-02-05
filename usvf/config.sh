@@ -23,7 +23,7 @@ COMPUTE_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3")
 # SSH Configuration
 SSH_USER="ubuntu"
 # CHANGE THIS: Path to SSH private key on deployment host
-SSH_KEY="/path/to/your/ssh-key"
+SSH_KEY="$HOME/usvf/usvf/virtual-dc/config/vdc-dc1/ssh-keys/id_rsa"
 # Example: SSH_KEY="$HOME/usvf/usvf/virtual-dc/config/vdc-dc1/ssh-keys/id_rsa"
 
 # Subnet base for this datacenter
