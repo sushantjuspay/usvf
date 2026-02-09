@@ -1154,7 +1154,7 @@ verify_deployment() {
     openstack service list
 
     log_info "Testing Ceph connectivity from cinder_volume..."
-    ssh ${SSH_USER}@${COMPUTES[0]} "sudo docker exec cinder_volume ceph -s --id cinder"
+    ssh ${SSH_OPTS} ${SSH_USER}@${COMPUTES[0]} "sudo docker exec cinder_volume ceph -s --id cinder"
 
     # Get Horizon password
     ADMIN_PASS=$(grep keystone_admin_password "$KOLLA_CONFIG/passwords.yml" | awk '{print $2}')
