@@ -533,7 +533,7 @@ Create your own topology by:
 
 ```yaml
 hypervisors:
-  - name: "hypervisor-5"
+  - name: "hypervisor-5.example"
     short_name: "hv5"
     router_id: "1.1.1.5"
     asn: 65005

@@ -18,7 +18,7 @@ CONTROL_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3")
 # For 3-node converged: Same as control nodes
 # For separated: Add more IPs like ("192.168.10.14" "192.168.10.15" ...)
 COMPUTE_IPS=("192.168.10.14" "192.168.10.15")
-COMPUTE_NAMES=("hypervisor-4" "hypervisor-5")
+COMPUTE_NAMES=("hypervisor-4.example" "hypervisor-5.example")
 
 # SSH Configuration
 SSH_USER="ubuntu"

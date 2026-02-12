@@ -277,7 +277,7 @@ ssh -i /path/to/key ubuntu@192.168.10.11 "sudo docker system prune -af"
 1. Edit `config.sh`:
    ```bash
    COMPUTE_IPS=("192.168.10.11" "192.168.10.12" "192.168.10.13" "192.168.10.14" "192.168.10.15")
-   COMPUTE_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3" "hypervisor-4" "hypervisor-5")
+   COMPUTE_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3" "hypervisor-4.example" "hypervisor-5.example")
    ```
 
 2. Re-run Ceph phases to add OSD nodes:

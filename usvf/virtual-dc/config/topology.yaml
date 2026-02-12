@@ -20,12 +20,12 @@ hypervisors:
         description: "Connection to switch-1"
     resources:
       cpu: 4
-      memory: 8192
-      disk: 15
+      memory: 10240
+      disk: 50
     # Additional disks for storage (optional)
     additional_disks:
       - name: "data1"
-        size: 10          # Size in GB
+        size: 20          # Size in GB
         format: "raw"   # Disk format (qcow2, raw)
 
   - name: "hypervisor-2"
@@ -39,11 +39,11 @@ hypervisors:
         description: "Connection to switch-1"
     resources:
       cpu: 4
-      memory: 8192
-      disk: 15
+      memory: 10240
+      disk: 50
     additional_disks:
       - name: "data1"
-        size: 10
+        size: 20
         format: "raw"
 
   - name: "hypervisor-3"
@@ -57,14 +57,14 @@ hypervisors:
         description: "Connection to switch-2"
     resources:
       cpu: 4
-      memory: 8192
-      disk: 15
+      memory: 10240
+      disk: 50
     additional_disks:
       - name: "data1"
-        size: 10
+        size: 20
         format: "raw"
 
-  - name: "hypervisor-4"
+  - name: "hypervisor-4.example"
     short_name: "hv4"
     router_id: "10.1.0.4"
     asn: 65004
@@ -75,14 +75,14 @@ hypervisors:
         description: "Connection to switch-2"
     resources:
       cpu: 4
-      memory: 8192
-      disk: 15
+      memory: 10240
+      disk: 50
     additional_disks:
       - name: "data1"
-        size: 10
+        size: 20
         format: "raw"
   
-  - name: "hypervisor-5"
+  - name: "hypervisor-5.example"
     short_name: "hv5"
     router_id: "10.1.0.5"
     asn: 65005
@@ -94,10 +94,10 @@ hypervisors:
     resources:
       cpu: 4
       memory: 8192
-      disk: 15
+      disk: 50
     additional_disks:
       - name: "data1"
-        size: 10
+        size: 20
         format: "raw"
 
 switches:
@@ -128,9 +128,9 @@ switches:
         - name: "enp2s0"
           description: "Connection to hypervisor-3"
         - name: "enp3s0"
-          description: "Connection to hypervisor-4"
+          description: "Connection to hypervisor-4.example"
         - name: "enp4s0"
-          description: "Connection to hypervisor-5"
+          description: "Connection to hypervisor-5.example"
         - name: "enp5s0"
           description: "Connection to switch-1"
       resources:
@@ -172,22 +172,22 @@ cabling:
     description: "switch-2 to hypervisor-3"
 
   - source:
-      device: "hypervisor-4"
+      device: "hypervisor-4.example"
       interface: "enp2s0"
     destination:
       device: "switch-2"
       interface: "enp3s0"
     link_type: "p2p"
-    description: "hypervisor-4 to switch-2"
+    description: "hypervisor-4.example to switch-2"
 
   - source:
-      device: "hypervisor-5"
+      device: "hypervisor-5.example"
       interface: "enp2s0"
     destination:
       device: "switch-2"
       interface: "enp4s0"
     link_type: "p2p"
-    description: "hypervisor-5 to switch-2"
+    description: "hypervisor-5.example to switch-2"
 
   - source:
       device: "switch-1"

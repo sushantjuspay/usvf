@@ -133,7 +133,7 @@ EOF
     cat > "$cloud_init_dir/user-data" <<EOF
 #cloud-config
 hostname: $hv_name
-fqdn: ${hv_name}.virtual-dc.local
+fqdn: ${hv_name}
 manage_etc_hosts: true
 
 users:
