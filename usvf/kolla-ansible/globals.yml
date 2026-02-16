@@ -61,6 +61,11 @@ enable_fluentd: "yes"
 enable_cinder: "yes"
 cinder_cluster_name: "ceph"
 
+# Metrics 
+enable_aodh: "yes"
+enable_gnocchi: "yes"      # Required for GnocchiAggregationByMetricsAlarm
+enable_ceilometer: "yes"   # Required to collect the metrics
+
 # ========================
 # 7. Ceph Configuration (External Cluster)
 # ========================
@@ -107,7 +112,7 @@ enable_ceph_rgw_loadbalancer: "yes"
 # IMPORTANT: Update these based on your deployment:
 #
 # For 3-node converged: RGW runs on hypervisor-1,2,3 (192.168.10.11-13)
-# For 5-node separated: RGW runs on hypervisor-4,5 (192.168.10.14-15)
+# For 5-node separated: RGW runs on hypervisor-4.example,5 (192.168.10.14-15)
 
 # Current configuration for 3-node converged setup:
 # ceph_rgw_hosts:

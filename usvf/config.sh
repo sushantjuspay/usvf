@@ -11,8 +11,8 @@
 # Control Nodes: Run Ceph MON/MGR + OpenStack control plane services
 # For 3-node converged setup: Use same IPs for both control and compute
 # For separated setup: Use different IPs for compute nodes
-CONTROL_IPS=("192.168.10.11" "192.168.10.12" "192.168.10.13")
-CONTROL_NAMES=("hypervisor-1" "hypervisor-2" "hypervisor-3")
+CONTROL_IPS=("192.168.10.11")
+CONTROL_NAMES=("hypervisor-1" )
 
 # Compute Nodes: Run Ceph OSD + OpenStack compute services
 # For 3-node converged: Same as control nodes
@@ -50,7 +50,7 @@ OPENSTACK_RELEASE="2024.2"          # OpenStack release
 # Loopback IPs for services (one per node, adjust array size based on node count)
 # For 3 nodes: 3 IPs, for 5 nodes: 5 IPs, etc.
 # If you add more compute nodes, add more IPs here
-API_TUNNEL_IPS=("10.1.0.1" "10.1.0.2" "10.1.0.3" "10.1.0.4" "10.1.0.5")
+API_TUNNEL_IPS=("10.1.0.1" "10.1.0.4" "10.1.0.5")
 
 # ----------------------------------------------------------------------------
 # Derived Variables (Don't edit these)
